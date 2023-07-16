@@ -15,6 +15,7 @@ output_folder = config.get('PATHS', 'output_folder')
 model_size = config.get('MODEL', 'model_size')
 device = config.get('MODEL', 'device')
 compute_type = config.get('MODEL', 'compute_type')
+generate_transcript = config.getboolean('OPTIONS', 'generate_transcript')
 
 # Ensure that the output folder exists
 if not os.path.exists(output_folder):
@@ -49,23 +50,40 @@ for file_name in os.listdir(input_folder):
         # Transcribe the MP3 audio file using the Faster-Whisper model and generate an SRT subtitle file
         audio_file = output_file
         subtitles_file = os.path.join(output_folder, os.path.splitext(file_name)[0] + ".srt")
+        transcript_file = os.path.join(output_folder, os.path.splitext(file_name)[0] + ".txt")
 
-        print(f"Generating file: {subtitles_file}")
-        segments, info = model.transcribe(audio_file, vad_filter=True)
-        print("Detected language '%s' with probability %f" % (info.language, info.language_probability))
+        # Check if the subtitles file already exists
+        if os.path.exists(subtitles_file):
+            print(f"Skipping {file_name} - subtitles file already exists")
+        else:
+            print(f"Generating file: {subtitles_file}")
+            segments, info = model.transcribe(audio_file, vad_filter=True)
+            print("Detected language '%s' with probability %f" % (info.language, info.language_probability))
 
-        subtitles = []
+            subtitles = []
 
-        for i, segment in enumerate(segments):
-            start_time = datetime.timedelta(milliseconds=segment.start * 1000)
-            end_time = datetime.timedelta(milliseconds=segment.end * 1000)
-            text = segment.text.strip()
+            for i, segment in enumerate(segments):
+                start_time = datetime.timedelta(milliseconds=segment.start * 1000)
+                end_time = datetime.timedelta(milliseconds=segment.end * 1000)
+                text = segment.text.strip()
 
-            if text:
-                subtitle = srt.Subtitle(index=i+1, start=start_time, end=end_time, content=text)
-                subtitles.append(subtitle)
+                if text:
+                    # Create a subtitle object for the segment
+                    subtitle = srt.Subtitle(index=i+1, start=start_time, end=end_time, content=text)
+                    subtitles.append(subtitle)
 
-        with open(subtitles_file, "w", encoding="utf-8") as f:
-            f.write(srt.compose(subtitles))
+            # Write the subtitles to the SRT file
+            with open(subtitles_file, "w", encoding="utf-8") as f:
+                f.write(srt.compose(subtitles))
 
-        print(f"Conversion of {file_name} successful")
+            print(f"Generation of {subtitles_file} successful")
+
+            # Write the transcript file if requested
+            if generate_transcript:
+                with open(transcript_file, "w", encoding="utf-8") as f:
+                    for segment in segments:
+                        f.write(segment.text + " ")
+
+                print(f"Generation of {transcript_file} successful")
+
+print("All conversions complete")
