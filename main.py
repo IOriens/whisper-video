@@ -2,67 +2,67 @@ import os
 import subprocess
 import configparser
 from faster_whisper import WhisperModel
+import datetime
 import srt
 
-# 读取配置文件
+# Read the configuration file
 config = configparser.ConfigParser()
 config.read('config.ini')
 
-# 从配置文件中获取输入文件夹和输出文件夹的地址
+# Get the input and output folder paths from the configuration file
 input_folder = config.get('PATHS', 'input_folder')
 output_folder = config.get('PATHS', 'output_folder')
+model_size = config.get('MODEL', 'model_size')
+device = config.get('MODEL', 'device')
+compute_type = config.get('MODEL', 'compute_type')
 
-# 确保输出文件夹存在
+# Ensure that the output folder exists
 if not os.path.exists(output_folder):
     os.makedirs(output_folder)
 
-# 初始化 Faster-Whisper 模型
-model_size = "large-v2"
+# Initialize the Faster-Whisper model
+model = WhisperModel(model_size, device=device, compute_type=compute_type)
 
-# Run on GPU with FP16
-model = WhisperModel(model_size, device="cuda", compute_type="float16")
-
-# or run on GPU with INT8
-# model = WhisperModel(model_size, device="cuda", compute_type="int8_float16")
-# or run on CPU with INT8
-# model = WhisperModel(model_size, device="cpu", compute_type="int8")
-
-# 遍历输入文件夹内的所有视频文件
+# Iterate over all video files in the input folder
 for file_name in os.listdir(input_folder):
     if file_name.endswith((".mp4", ".avi", ".mov", ".wmv", ".flv", ".mkv")):
-        # 构造输入文件名和输出文件名
+        # Construct the input and output file paths
         input_file = os.path.join(input_folder, file_name)
         output_file = os.path.join(output_folder, os.path.splitext(file_name)[0] + ".mp3")
 
-        # 执行 ffmpeg 命令进行转换，并禁用进度输出
-        cmd = ["ffmpeg", "-i", input_file, "-vn", "-acodec", "libmp3lame", "-ab", "192k", "-ac", "2", "-loglevel", "quiet", output_file]
-        print('Processing file: ' + input_file)
-        print('Output file path: ' + output_file)
-        result = subprocess.run(cmd)
+        # Check if the output file already exists
+        if os.path.exists(output_file):
+            print(f"Skipping {file_name} - audio file already exists")
+        else:
+            # Convert the video file to MP3 format using ffmpeg, and disable progress output
+            cmd = ["ffmpeg", "-i", input_file, "-vn", "-acodec", "libmp3lame", "-ab", "192k", "-ac", "2", "-loglevel", "quiet", output_file]
+            print(f"Processing file: {input_file}")
+            print(f"Output file path: {output_file}")
+            result = subprocess.run(cmd)
 
-        # 检查 ffmpeg 执行结果
-        if result.returncode != 0:
-            print(f"Conversion of {file_name} failed")
-            continue
-        print(f"Conversion of {file_name} success")
+            # Check the result of the ffmpeg command
+            if result.returncode != 0:
+                print(f"Conversion of {file_name} failed")
+                continue
+            print(f"Conversion of {file_name} success")
 
-        # 将 MP3 音频文件转换为字幕文件
+        # Transcribe the MP3 audio file using the Faster-Whisper model and generate an SRT subtitle file
         audio_file = output_file
         subtitles_file = os.path.join(output_folder, os.path.splitext(file_name)[0] + ".srt")
 
-        segments, info = model.transcribe(audio_file, beam_size=5)
-
+        print(f"Generating file: {subtitles_file}")
+        segments, info = model.transcribe(audio_file, vad_filter=True)
         print("Detected language '%s' with probability %f" % (info.language, info.language_probability))
 
         subtitles = []
 
         for i, segment in enumerate(segments):
-            start_time = int(segment.start * 1000)
-            end_time = int(segment.end * 1000)
+            start_time = datetime.timedelta(milliseconds=segment.start * 1000)
+            end_time = datetime.timedelta(milliseconds=segment.end * 1000)
             text = segment.text.strip()
 
             if text:
-                subtitle = srt.Subtitle(index=i+1, start=srt.millisecond_to_timedelta(start_time), end=srt.millisecond_to_timedelta(end_time), content=text)
+                subtitle = srt.Subtitle(index=i+1, start=start_time, end=end_time, content=text)
                 subtitles.append(subtitle)
 
         with open(subtitles_file, "w", encoding="utf-8") as f:
