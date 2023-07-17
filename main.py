@@ -4,6 +4,7 @@ import configparser
 from faster_whisper import WhisperModel
 import datetime
 import srt
+import logging
 
 def read_config(config_file):
     """
@@ -18,9 +19,11 @@ def read_config(config_file):
     model_size = config.get('MODEL', 'model_size')
     device = config.get('MODEL', 'device')
     compute_type = config.get('MODEL', 'compute_type')
+    task = config.get('MODEL', 'task')
     generate_transcript = config.getboolean('OPTIONS', 'generate_transcript')
 
-    return input_folder, output_folder, model_size, device, compute_type, generate_transcript
+
+    return input_folder, output_folder, model_size, device, compute_type, task, generate_transcript
 
 def convert_to_mp3(video_file, audio_file):
     """
@@ -43,7 +46,7 @@ def convert_to_mp3(video_file, audio_file):
     print(f"Conversion of {video_file} success")
     return True
 
-def generate_subtitles(audio_file, subtitle_file, transcript_file=None):
+def generate_subtitles(model, task, audio_file, subtitle_file, transcript_file=None):
     """
     Transcribes the specified audio file using the Faster-Whisper model, generates an SRT subtitle file
     at the specified output file path, and optionally generates a transcript file. Returns True if the
@@ -53,16 +56,17 @@ def generate_subtitles(audio_file, subtitle_file, transcript_file=None):
         print(f"Skipping {audio_file} - subtitles file already exists")
         return True
 
-    model = WhisperModel(model_size, device=device, compute_type=compute_type)
-    segments, info = model.transcribe(audio_file, vad_filter=True)
+    segments, info = model.transcribe(audio_file, vad_filter=True, task=task)
     print("Detected language '%s' with probability %f" % (info.language, info.language_probability))
 
     subtitles = []
+    texts = []
 
     for i, segment in enumerate(segments):
         start_time = datetime.timedelta(milliseconds=segment.start * 1000)
         end_time = datetime.timedelta(milliseconds=segment.end * 1000)
         text = segment.text.strip()
+        texts.append(text)
 
         if text:
             # Create a subtitle object for the segment
@@ -76,18 +80,22 @@ def generate_subtitles(audio_file, subtitle_file, transcript_file=None):
     print(f"Generation of {subtitle_file} successful")
 
     # Write the transcript file if requested
+    print('transcript_file   ' + transcript_file)
     if transcript_file:
         with open(transcript_file, "w", encoding="utf-8") as f:
-            for segment in segments:
-                f.write(segment.text + " ")
-
+            for text in texts:
+                f.write(text + " ")
         print(f"Generation of {transcript_file} successful")
 
     return True
 
 if __name__ == "__main__":
     config_file = 'config.ini'
-    input_folder, output_folder, model_size, device, compute_type, generate_transcript = read_config(config_file)
+    input_folder, output_folder, model_size, device, compute_type, task, generate_transcript = read_config(config_file)
+
+    logging.basicConfig()
+    logging.getLogger("faster_whisper").setLevel(logging.DEBUG)
+    model = WhisperModel(model_size, device=device, compute_type=compute_type)
 
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
@@ -100,6 +108,6 @@ if __name__ == "__main__":
             transcript_file = os.path.join(output_folder, os.path.splitext(file_name)[0] + ".txt") if generate_transcript else None
 
             if convert_to_mp3(video_file, audio_file):
-                generate_subtitles(audio_file, subtitle_file, transcript_file)
+                generate_subtitles(model, task, audio_file, subtitle_file, transcript_file)
 
     print("All conversions complete")
