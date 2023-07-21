@@ -5,6 +5,12 @@ from faster_whisper import WhisperModel
 import datetime
 import srt
 import logging
+from langchain.chat_models import ChatOpenAI
+from langchain.docstore.document import Document
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.chains.summarize import load_summarize_chain
+from langchain.prompts import PromptTemplate
+
 
 def read_config(config_file):
     """
@@ -14,16 +20,32 @@ def read_config(config_file):
     config = configparser.ConfigParser()
     config.read(config_file)
 
-    input_folder = config.get('PATHS', 'input_folder')
-    output_folder = config.get('PATHS', 'output_folder')
-    model_size = config.get('MODEL', 'model_size')
-    device = config.get('MODEL', 'device')
-    compute_type = config.get('MODEL', 'compute_type')
-    task = config.get('MODEL', 'task')
-    generate_transcript = config.getboolean('OPTIONS', 'generate_transcript')
+    input_folder = config.get("PATHS", "input_folder")
+    output_folder = config.get("PATHS", "output_folder")
+    model_size = config.get("MODEL", "model_size")
+    device = config.get("MODEL", "device")
+    compute_type = config.get("MODEL", "compute_type")
+    task = config.get("MODEL", "task")
+    generate_transcript = config.getboolean("OPTIONS", "generate_transcript")
+    generate_summary = config.getboolean("OPTIONS", "generate_summary")
+    summary_language = config.get("OPTIONS", "summary_language")
+    openai_api_key = config.get("OPENAI", "API_KEY")
+    openai_api_base = config.get("OPENAI", "API_BASE")
 
+    return (
+        input_folder,
+        output_folder,
+        model_size,
+        device,
+        compute_type,
+        task,
+        generate_transcript,
+        generate_summary,
+        summary_language,
+        openai_api_key,
+        openai_api_base,
+    )
 
-    return input_folder, output_folder, model_size, device, compute_type, task, generate_transcript
 
 def convert_to_mp3(video_file, audio_file):
     """
@@ -34,7 +56,21 @@ def convert_to_mp3(video_file, audio_file):
         print(f"Skipping {video_file} - audio file already exists")
         return True
 
-    cmd = ["ffmpeg", "-i", video_file, "-vn", "-acodec", "libmp3lame", "-ab", "192k", "-ac", "2", "-loglevel", "quiet", audio_file]
+    cmd = [
+        "ffmpeg",
+        "-i",
+        video_file,
+        "-vn",
+        "-acodec",
+        "libmp3lame",
+        "-ab",
+        "192k",
+        "-ac",
+        "2",
+        "-loglevel",
+        "quiet",
+        audio_file,
+    ]
     print(f"Processing: {video_file}")
     print(f"Output audio path: {audio_file}")
     result = subprocess.run(cmd)
@@ -45,6 +81,7 @@ def convert_to_mp3(video_file, audio_file):
 
     print(f"Conversion of {video_file} success")
     return True
+
 
 def generate_subtitles(model, task, audio_file, subtitle_file, transcript_file=None):
     """
@@ -57,7 +94,10 @@ def generate_subtitles(model, task, audio_file, subtitle_file, transcript_file=N
         return True
 
     segments, info = model.transcribe(audio_file, vad_filter=True, task=task)
-    print("Detected language '%s' with probability %f" % (info.language, info.language_probability))
+    print(
+        "Detected language '%s' with probability %f"
+        % (info.language, info.language_probability)
+    )
 
     subtitles = []
     texts = []
@@ -70,7 +110,9 @@ def generate_subtitles(model, task, audio_file, subtitle_file, transcript_file=N
 
         if text:
             # Create a subtitle object for the segment
-            subtitle = srt.Subtitle(index=i+1, start=start_time, end=end_time, content=text)
+            subtitle = srt.Subtitle(
+                index=i + 1, start=start_time, end=end_time, content=text
+            )
             subtitles.append(subtitle)
 
     # Write the subtitles to the SRT file
@@ -80,7 +122,7 @@ def generate_subtitles(model, task, audio_file, subtitle_file, transcript_file=N
     print(f"Generation of {subtitle_file} successful")
 
     # Write the transcript file if requested
-    print('transcript_file   ' + transcript_file)
+    print("transcript_file   " + transcript_file)
     if transcript_file:
         with open(transcript_file, "w", encoding="utf-8") as f:
             for text in texts:
@@ -89,9 +131,102 @@ def generate_subtitles(model, task, audio_file, subtitle_file, transcript_file=N
 
     return True
 
+
+def summarize(
+    transcript_file, summary_file, summary_language, openai_api_key, openai_api_base
+):
+    # Instantiate the LLM modelI
+    if os.path.exists(summary_file):
+        print(f"Skipping {summary_file} - summary file already exists")
+        return True
+    print("Strat summaring " + transcript_file)
+
+    llm = ChatOpenAI(
+        temperature=0.7,
+        openai_api_key=openai_api_key,
+        openai_api_base=openai_api_base,
+    )
+    with open(transcript_file, "r") as file:
+        txt = file.read()
+    # print(txt)
+    # Split text
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=2000,
+    )
+    texts = text_splitter.split_text(txt)
+    # Create multiple documents
+    docs = [Document(page_content=t) for t in texts]
+    # Text summarization
+    # Write a concise summary of the following
+    # CONCISE SUMMARY IN {language}:"""
+    map_prompt_template = """Write a summary of the following:
+
+
+    {text}
+
+
+    SUMMARY IN {language}:"""
+
+    map_prompt = PromptTemplate(
+        template=map_prompt_template,
+        input_variables=[
+            "text",
+        ],
+        partial_variables={"language": summary_language},
+    )
+    
+    
+    combine_prompt_template = """Write a summary of the following summaries:
+
+
+    {text}
+
+
+    SUMMARY IN {language}:"""
+    
+    combine_prompt = PromptTemplate(
+        template=combine_prompt_template,
+        input_variables=[
+            "text",
+        ],
+        partial_variables={"language": summary_language},
+    )
+
+
+    chain = load_summarize_chain(
+        llm,
+        chain_type="map_reduce",
+        return_intermediate_steps=True,
+        map_prompt=map_prompt,
+        combine_prompt=combine_prompt,
+    )
+
+    response = chain({"input_documents": docs}, return_only_outputs=True)
+    print(response)
+    with open(summary_file, "w", encoding="utf-8") as f:
+        f.write("Summary_text:\n")
+        f.write(response["output_text"])
+        f.write("\n\nSection Contents:\n\n")
+        for idx,section in enumerate(response["intermediate_steps"]):
+            f.write(f"{idx + 1}.{section}\n")
+    return True
+
+
 if __name__ == "__main__":
-    config_file = 'config.ini'
-    input_folder, output_folder, model_size, device, compute_type, task, generate_transcript = read_config(config_file)
+    config_file = "config.ini"
+    (
+        input_folder,
+        output_folder,
+        model_size,
+        device,
+        compute_type,
+        task,
+        generate_transcript,
+        generate_summary,
+        summary_language,
+        openai_api_key,
+        openai_api_base,
+    ) = read_config(config_file)
 
     logging.basicConfig()
     logging.getLogger("faster_whisper").setLevel(logging.DEBUG)
@@ -103,11 +238,40 @@ if __name__ == "__main__":
     for file_name in os.listdir(input_folder):
         if file_name.endswith((".mp4", ".avi", ".mov", ".wmv", ".flv", ".mkv")):
             video_file = os.path.join(input_folder, file_name)
-            audio_file = os.path.join(output_folder, os.path.splitext(file_name)[0] + ".mp3")
-            subtitle_file = os.path.join(output_folder, os.path.splitext(file_name)[0] + ".srt")
-            transcript_file = os.path.join(output_folder, os.path.splitext(file_name)[0] + ".txt") if generate_transcript else None
+            audio_file = os.path.join(
+                output_folder, os.path.splitext(file_name)[0] + ".mp3"
+            )
+            subtitle_file = os.path.join(
+                output_folder, os.path.splitext(file_name)[0] + ".srt"
+            )
+            transcript_file = (
+                os.path.join(output_folder, os.path.splitext(file_name)[0] + ".txt")
+                if generate_transcript
+                else None
+            )
+            summary_file = (
+                os.path.join(
+                    output_folder, os.path.splitext(file_name)[0] + "-summary.txt"
+                )
+                if generate_summary
+                else None
+            )
 
             if convert_to_mp3(video_file, audio_file):
-                generate_subtitles(model, task, audio_file, subtitle_file, transcript_file)
+                generate_subtitles(
+                    model,
+                    task,
+                    audio_file,
+                    subtitle_file,
+                    transcript_file,
+                )
+            if generate_summary:
+                summarize(
+                    transcript_file,
+                    summary_file,
+                    summary_language,
+                    openai_api_key,
+                    openai_api_base,
+                )
 
     print("All conversions complete")
