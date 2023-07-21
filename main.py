@@ -288,7 +288,7 @@ if __name__ == "__main__":
             )
             summary_file = (
                 os.path.join(
-                    output_folder, os.path.splitext(file_name)[0] + "-summary.txt"
+                    output_folder, os.path.splitext(file_name)[0] + ".md"
                 )
                 if generate_summary
                 else None
