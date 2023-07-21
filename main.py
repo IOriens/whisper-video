@@ -31,6 +31,8 @@ def read_config(config_file):
     summary_language = config.get("OPTIONS", "summary_language")
     openai_api_key = config.get("OPENAI", "API_KEY")
     openai_api_base = config.get("OPENAI", "API_BASE")
+    openai_model = config.get("OPENAI", "model")
+    text_chunk_size = config.getint("OPTIONS", "text_chunk_size")
 
     return (
         input_folder,
@@ -44,6 +46,8 @@ def read_config(config_file):
         summary_language,
         openai_api_key,
         openai_api_base,
+        openai_model,
+        text_chunk_size,
     )
 
 
@@ -133,7 +137,13 @@ def generate_subtitles(model, task, audio_file, subtitle_file, transcript_file=N
 
 
 def summarize(
-    transcript_file, summary_file, summary_language, openai_api_key, openai_api_base
+    transcript_file,
+    summary_file,
+    summary_language,
+    openai_api_key,
+    openai_api_base,
+    openai_model,
+    text_chunk_size,
 ):
     # Instantiate the LLM modelI
     if os.path.exists(summary_file):
@@ -142,6 +152,7 @@ def summarize(
     print("Strat summaring " + transcript_file)
 
     llm = ChatOpenAI(
+        model=openai_model,
         temperature=0.7,
         openai_api_key=openai_api_key,
         openai_api_base=openai_api_base,
@@ -151,7 +162,7 @@ def summarize(
     # print(txt)
     # Split text
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=2000,
+        chunk_size=text_chunk_size,
     )
     texts = text_splitter.split_text(txt)
     # Create multiple documents
@@ -159,7 +170,33 @@ def summarize(
     # Text summarization
     # Write a concise summary of the following
     # CONCISE SUMMARY IN {language}:"""
-    map_prompt_template = """Write a summary of the following:
+
+    if len(docs) == 1:
+        stuff_prompt_template = """Please use Markdown syntax to help me summarize the key information and important content. Your response should summarize the main information and important content in the original text in a clear manner, using appropriate headings, markers, and formats to facilitate readability and understanding.Please note that your response should retain the relevant details in the original text while presenting them in a concise and clear manner. You can freely choose the content to highlight and use appropriate Markdown markers to emphasize it. Now summary following content in {language}:
+
+        {text}
+
+        """
+        stuff_prompt = PromptTemplate(
+            template=stuff_prompt_template,
+            input_variables=[
+                "text",
+            ],
+            partial_variables={"language": summary_language},
+        )
+
+        chain = load_summarize_chain(
+            llm,
+            chain_type="stuff",
+            prompt=stuff_prompt
+        )
+        response = chain.run(docs)
+        print(response)
+        with open(summary_file, "w", encoding="utf-8") as f:
+            f.write(response)
+        return True
+
+    map_prompt_template = """Write a concise summary of the following:
 
 
     {text}
@@ -174,16 +211,15 @@ def summarize(
         ],
         partial_variables={"language": summary_language},
     )
-    
-    
-    combine_prompt_template = """Write a summary of the following summaries:
+
+    combine_prompt_template = """Write a concise summary of the following:
 
 
     {text}
 
 
-    SUMMARY IN {language}:"""
-    
+    CONCISE SUMMARY IN {language}:"""
+
     combine_prompt = PromptTemplate(
         template=combine_prompt_template,
         input_variables=[
@@ -191,7 +227,6 @@ def summarize(
         ],
         partial_variables={"language": summary_language},
     )
-
 
     chain = load_summarize_chain(
         llm,
@@ -207,7 +242,7 @@ def summarize(
         f.write("Summary_text:\n")
         f.write(response["output_text"])
         f.write("\n\nSection Contents:\n\n")
-        for idx,section in enumerate(response["intermediate_steps"]):
+        for idx, section in enumerate(response["intermediate_steps"]):
             f.write(f"{idx + 1}.{section}\n")
     return True
 
@@ -226,6 +261,8 @@ if __name__ == "__main__":
         summary_language,
         openai_api_key,
         openai_api_base,
+        openai_model,
+        text_chunk_size,
     ) = read_config(config_file)
 
     logging.basicConfig()
@@ -272,6 +309,8 @@ if __name__ == "__main__":
                     summary_language,
                     openai_api_key,
                     openai_api_base,
+                    openai_model,
+                    text_chunk_size,
                 )
 
     print("All conversions complete")
