@@ -2,6 +2,8 @@
 
 This Python script converts video files to SRT subtitle files using the Faster-Whisper model for speech recognition. The script reads video files from an input folder, converts them to MP3 format using ffmpeg, transcribes the audio using the Faster-Whisper model, and generates an SRT subtitle file for each video file in the output folder.
 
+![](./Intro.png)
+
 ### Requirements
 
 To run this script, you will need:
