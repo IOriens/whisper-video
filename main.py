@@ -4,6 +4,7 @@ import configparser
 from faster_whisper import WhisperModel
 import datetime
 import srt
+import shutil
 import logging
 from langchain.chat_models import ChatOpenAI
 from langchain.docstore.document import Document
@@ -33,6 +34,7 @@ def read_config(config_file):
     openai_api_base = config.get("OPENAI", "API_BASE")
     openai_model = config.get("OPENAI", "model")
     text_chunk_size = config.getint("OPTIONS", "text_chunk_size")
+    max_chunk = config.getint("OPTIONS", "max_chunk")
 
     return (
         input_folder,
@@ -48,6 +50,7 @@ def read_config(config_file):
         openai_api_base,
         openai_model,
         text_chunk_size,
+        max_chunk
     )
 
 
@@ -58,6 +61,12 @@ def convert_to_mp3(video_file, audio_file):
     """
     if os.path.exists(audio_file):
         print(f"Skipping {video_file} - audio file already exists")
+        return True
+    
+    # if file is mp3, just use shutil to copy it
+    if video_file.endswith(".mp3"):
+        print(f"Copying {video_file} to {audio_file}")
+        shutil.copy2(video_file, audio_file)
         return True
 
     cmd = [
@@ -144,6 +153,7 @@ def summarize(
     openai_api_base,
     openai_model,
     text_chunk_size,
+    max_chunk
 ):
     # Instantiate the LLM modelI
     if os.path.exists(summary_file):
@@ -196,6 +206,9 @@ def summarize(
             f.write(response)
         return True
 
+    if(len(docs) > max_chunk):
+        print('The doc is too long, you should use gpt4-4k or calude to summarize it')
+        return True
     map_prompt_template = """Write a concise summary of the following:
 
 
@@ -263,6 +276,7 @@ if __name__ == "__main__":
         openai_api_base,
         openai_model,
         text_chunk_size,
+        max_chunk
     ) = read_config(config_file)
 
     logging.basicConfig()
@@ -273,7 +287,8 @@ if __name__ == "__main__":
         os.makedirs(output_folder)
 
     for file_name in os.listdir(input_folder):
-        if file_name.endswith((".mp4", ".avi", ".mov", ".wmv", ".flv", ".mkv")):
+        # if file is video or audio
+        if file_name.endswith((".mp4", ".avi", ".mov", ".wmv", ".flv", ".mkv", ".mp3")):
             video_file = os.path.join(input_folder, file_name)
             audio_file = os.path.join(
                 output_folder, os.path.splitext(file_name)[0] + ".mp3"
@@ -302,15 +317,20 @@ if __name__ == "__main__":
                     subtitle_file,
                     transcript_file,
                 )
-            if generate_summary:
-                summarize(
-                    transcript_file,
-                    summary_file,
-                    summary_language,
-                    openai_api_key,
-                    openai_api_base,
-                    openai_model,
-                    text_chunk_size,
-                )
+            try:
+                if generate_summary:
+                    summarize(
+                        transcript_file,
+                        summary_file,
+                        summary_language,
+                        openai_api_key,
+                        openai_api_base,
+                        openai_model,
+                        text_chunk_size,
+                        max_chunk
+                    )
+            except Exception as e:
+                print(e)
+                continue
 
     print("All conversions complete")
